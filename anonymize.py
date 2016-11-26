@@ -51,6 +51,9 @@ def get_updates(config):
             elif operation == 'random_ip':
                 for field in listify(details):
                     updates.append("`%s` = INET_NTOA(RAND()*1000000000)" % field)
+            elif operation == 'random_mac':
+                for field in listify(details):
+                    updates.append("`%(field)s` = itomac(ROUND(RAND(`%(randsource)s`)*10000000000000))" % {"field": field, "randsource": field})
             elif operation == 'random_email':
                 for field in listify(details):
                     updates.append("`%s` = CONCAT(id, '@mozilla.com')"
@@ -82,6 +85,18 @@ def anonymize(config):
          print "USE `%s`;" % database['name']
 
     print "SET FOREIGN_KEY_CHECKS=0;"
+
+    print "delimiter $$\
+create function itomac (i BIGINT)\
+returns char(20)\
+language SQL\
+begin\
+declare temp CHAR(20);\
+set temp = lpad (hex (i), 12, '0');\
+return concat (left (temp, 2),'-',mid(temp,3,2),'-',mid(temp,5,2),'-',mid(temp,7,2),'-',mid(temp,9,2),'-',mid(temp,11,2));\
+end;\
+$$\
+delimiter ;"
 
     sql = []
     sql.extend(get_truncates(config))
