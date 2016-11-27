@@ -5,8 +5,18 @@ import hashlib
 import random
 
 
+logging.basicConfig()
 log = logging.getLogger('anonymize')
 common_hash_secret = "%016x" % (random.getrandbits(128))
+
+
+def get_raw_sqls(tag, config):
+    database = config.get('database', {})
+    raw_sqls = database.get(tag, [])
+    sql = []
+    for raw_sql in raw_sqls:
+        sql.append(raw_sql)
+    return sql
 
 
 def get_truncates(config):
@@ -53,7 +63,7 @@ def get_updates(config):
                     updates.append("`%s` = INET_NTOA(RAND()*1000000000)" % field)
             elif operation == 'random_mac':
                 for field in listify(details):
-                    updates.append("`%(field)s` = itomac(ROUND(RAND(`%(randsource)s`)*10000000000000))" % {"field": field, "randsource": field})
+                    updates.append("`%s` = itomac(ROUND(RAND()*10000000000000))" % field)
             elif operation == 'random_email':
                 for field in listify(details):
                     updates.append("`%s` = CONCAT(id, '@mozilla.com')"
@@ -65,14 +75,23 @@ def get_updates(config):
                 for field in listify(details):
                     updates.append("`%(field)s` = MD5(CONCAT(@common_hash_secret, `%(field)s`))"
                                    % dict(field=field))
+            elif operation == 'hash_ip':
+                for field in listify(details):
+                    updates.append("`%(field)s` = INET_NTOA(MOD(@common_hash_secret * 4294967295 - INET_ATON(`%(field)s`), 4294967295))"
+                                   % dict(field=field))
             elif operation == 'hash_email':
                 for field in listify(details):
                     updates.append("`%(field)s` = CONCAT(MD5(CONCAT(@common_hash_secret, `%(field)s`)), '@mozilla.com')"
                                    % dict(field=field))
+            # This doesn't work yet -- max() isn't allowed in an update directly like this.
+            # elif operation == 'advance_date':
+            #     for field in listify(details):
+            #         updates.append("`%(field)s` = `%(field)s`+(now()-max(`%(field)s`))"
+            #                        % dict(field=field))
             elif operation == 'delete':
                 continue
             else:
-                log.warning('Unknown operation.')
+                log.warning('Unknown operation: '+operation)
         if updates:
             sql.append('UPDATE `%s` SET %s' % (table, ', '.join(updates)))
     return sql
@@ -86,22 +105,25 @@ def anonymize(config):
 
     print "SET FOREIGN_KEY_CHECKS=0;"
 
-    print "delimiter $$\
-create function itomac (i BIGINT)\
-returns char(20)\
-language SQL\
-begin\
-declare temp CHAR(20);\
-set temp = lpad (hex (i), 12, '0');\
-return concat (left (temp, 2),'-',mid(temp,3,2),'-',mid(temp,5,2),'-',mid(temp,7,2),'-',mid(temp,9,2),'-',mid(temp,11,2));\
-end;\
-$$\
-delimiter ;"
+    print """delimiter $$
+drop function if exists itomac;$$
+create function itomac (i BIGINT)
+returns char(20)
+language SQL
+begin
+declare temp CHAR(20);
+set temp = lpad (hex (i), 12, '0');
+return concat (left (temp, 2),':',mid(temp,3,2),':',mid(temp,5,2),':',mid(temp,7,2),':',mid(temp,9,2),':',mid(temp,11,2));
+end;
+$$
+delimiter ;"""
 
     sql = []
+    sql.extend(get_raw_sqls('raw_pre_sql', config))
     sql.extend(get_truncates(config))
     sql.extend(get_deletes(config))
     sql.extend(get_updates(config))
+    sql.extend(get_raw_sqls('raw_post_sql', config))
     for stmt in sql:
         print stmt + ';'
 
